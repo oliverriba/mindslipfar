@@ -256,22 +256,6 @@
     <div id="ui-text"></div>
   </div>
 
-  <!-- Video clip overlay — rapid cuts after rainbow -->
-  <div id="video-overlay" style="
-    position:absolute; top:0; left:0; width:100%; height:100%;
-    z-index:8; display:none; background:#000; overflow:hidden;
-  ">
-    <video id="video-player" style="
-      width:100%; height:100%; object-fit:cover;
-      image-rendering:pixelated;
-    " playsinline muted></video>
-    <div id="video-fade" style="
-      position:absolute; top:0; left:0; width:100%; height:100%;
-      background:#000; opacity:0; pointer-events:none;
-      transition: opacity 0s;
-    "></div>
-  </div>
-
   <div id="crt"></div>
 
   <!-- Title -->
@@ -529,13 +513,442 @@ function drawInvKey() {
   </svg>`;
 }
 
-// Rainbow flash zone and total duration
-const RAINBOW_START = 2800;
-const RAINBOW_END   = 2920;
-const TOTAL_TICKS   = 2960; // fires ~40 ticks after rainbow ends
+// 5 mins 4 secs = 304 seconds × 60fps = 18,240 ticks
+// We pace chapters across that full duration
+const TOTAL_TICKS = 18240;
 
-function spawnFragments() {
-  state.fragments = []; // no lyrics — pure visual
+// Chapter boundaries (ticks)
+const CH = {
+  fall:        0,      // 0:00 — falling toward the sun
+  sun:         1800,   // 0:30 — entering the sun, blinding heat
+  void:        3600,   // 1:00 — consumed, floating in white void
+  space:       5400,   // 1:30 — ejected into deep space, stars
+  saturn:      7200,   // 2:00 — drifting past Saturn
+  nebula:      9000,   // 2:30 — drifting through a nebula
+  debris:      10800,  // 3:00 — asteroid field, rumble
+  redplanet:   12600,  // 3:30 — red planet surface close-up
+  rainbow:     14400,  // 4:00 — rainbow chaos
+  implosion:   15600,  // 4:20 — everything implodes to black
+  silence:     16800,  // 4:40 — silence, floating, one star
+  end:         17800,  // 4:57 — fade to end
+};
+
+function spawnFragments() { state.fragments = []; }
+
+// ─── Star field ───────────────────────────────────────────────────────────────
+const STARS = Array.from({length: 300}, () => ({
+  x: Math.random() * 640,
+  y: Math.random() * 420,
+  r: Math.random() * 1.5 + 0.3,
+  twinkle: Math.random() * Math.PI * 2,
+  speed: Math.random() * 0.5 + 0.1,
+}));
+
+// ─── Asteroid field ───────────────────────────────────────────────────────────
+const ROCKS = Array.from({length: 40}, () => ({
+  x: Math.random() * 640,
+  y: Math.random() * 420,
+  r: Math.random() * 18 + 4,
+  vx: (Math.random() - 0.5) * 3,
+  vy: (Math.random() - 0.5) * 2,
+  rot: Math.random() * Math.PI * 2,
+  rotSpeed: (Math.random() - 0.5) * 0.05,
+  col: `hsl(${20 + Math.random()*30}, ${10 + Math.random()*20}%, ${15 + Math.random()*20}%)`,
+}));
+
+function lerp(a, b, t) { return a + (b - a) * Math.max(0, Math.min(1, t)); }
+function easeIn(t) { return t * t; }
+function easeOut(t) { return 1 - (1-t)*(1-t); }
+function chapterProgress(start, end, p) { return Math.max(0, Math.min(1, (p - start) / (end - start))); }
+
+function drawFall(t, dt) {
+  const p = state.sunPhase;
+
+  // ── CHAPTER 0: FALLING TOWARD SUN ─────────────────────────────────────────
+  if (p < CH.sun) {
+    const cp = chapterProgress(CH.fall, CH.sun, p);
+    const bgR = Math.floor(lerp(5, 180, easeIn(cp)));
+    const bgG = Math.floor(lerp(2, 40, easeIn(cp)));
+    const bgB = Math.floor(lerp(2, 10, easeIn(cp)));
+    ctx.fillStyle = `rgb(${bgR},${bgG},${bgB})`;
+    ctx.fillRect(0, 0, 640, 420);
+
+    // sun growing from a dot
+    const sunR = lerp(2, 500, easeIn(cp));
+    const sg = ctx.createRadialGradient(320, 210, 0, 320, 210, sunR);
+    sg.addColorStop(0, '#ffffff');
+    sg.addColorStop(0.2, '#fff5aa');
+    sg.addColorStop(0.5, '#ffaa00');
+    sg.addColorStop(0.85, '#ff4400');
+    sg.addColorStop(1, 'transparent');
+    ctx.fillStyle = sg;
+    ctx.fillRect(0, 0, 640, 420);
+
+    // rays spin in
+    if (cp > 0.3) {
+      const rayA = Math.sin((cp - 0.3) / 0.7 * Math.PI) * 0.14;
+      ctx.save(); ctx.globalAlpha = rayA;
+      for (let r = 0; r < 16; r++) {
+        const angle = (r / 16) * Math.PI * 2 + p * 0.004;
+        ctx.beginPath();
+        ctx.moveTo(320, 210);
+        ctx.lineTo(320 + Math.cos(angle)*700, 210 + Math.sin(angle)*700);
+        ctx.strokeStyle = '#ffee88'; ctx.lineWidth = 16; ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // grain
+    if (cp > 0.6) {
+      ctx.save(); ctx.globalAlpha = (cp - 0.6) / 0.4 * 0.07;
+      for (let i = 0; i < 200; i++) {
+        ctx.fillStyle = '#ff8800';
+        ctx.fillRect(Math.random()*640, Math.random()*420, 2, 2);
+      }
+      ctx.restore();
+    }
+    // shake ramps up
+    state.shake = cp > 0.7 ? lerp(0, 6, (cp - 0.7) / 0.3) : 0;
+  }
+
+  // ── CHAPTER 1: INSIDE THE SUN / BLINDING ──────────────────────────────────
+  else if (p < CH.void) {
+    const cp = chapterProgress(CH.sun, CH.void, p);
+    // white hot → cooling orange → deep red
+    const r = Math.floor(lerp(255, 120, cp));
+    const g = Math.floor(lerp(255, 20, cp));
+    const b = Math.floor(lerp(200, 10, cp));
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(0, 0, 640, 420);
+    // plasma blobs
+    for (let i = 0; i < 6; i++) {
+      const bx = 320 + Math.sin(p * 0.02 + i * 1.1) * 200;
+      const by = 210 + Math.cos(p * 0.018 + i * 0.9) * 160;
+      const br = 60 + Math.sin(p * 0.03 + i) * 30;
+      const bg = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+      bg.addColorStop(0, `rgba(255,255,${Math.floor(lerp(255,100,cp))},0.5)`);
+      bg.addColorStop(1, 'transparent');
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 640, 420);
+    }
+    // heavy grain
+    ctx.save(); ctx.globalAlpha = 0.1;
+    for (let i = 0; i < 400; i++) {
+      ctx.fillStyle = cp < 0.5 ? '#ffffff' : '#ff6600';
+      ctx.fillRect(Math.random()*640, Math.random()*420, 2, 2);
+    }
+    ctx.restore();
+    state.shake = lerp(8, 2, cp);
+  }
+
+  // ── CHAPTER 2: WHITE VOID / FLOATING ──────────────────────────────────────
+  else if (p < CH.space) {
+    const cp = chapterProgress(CH.void, CH.space, p);
+    // white → slowly darkening to deep space blue-black
+    const r = Math.floor(lerp(80, 2, cp));
+    const g = Math.floor(lerp(40, 2, cp));
+    const b = Math.floor(lerp(30, 8, cp));
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(0, 0, 640, 420);
+    // stars fading in
+    ctx.save(); ctx.globalAlpha = easeIn(cp);
+    STARS.forEach(s => {
+      const tw = 0.7 + 0.3 * Math.sin(t / 800 + s.twinkle);
+      ctx.globalAlpha = easeIn(cp) * tw * 0.8;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+      ctx.fill();
+    });
+    ctx.restore();
+    state.shake = 0;
+  }
+
+  // ── CHAPTER 3: DEEP SPACE / DRIFTING ──────────────────────────────────────
+  else if (p < CH.saturn) {
+    const cp = chapterProgress(CH.space, CH.saturn, p);
+    ctx.fillStyle = '#020208';
+    ctx.fillRect(0, 0, 640, 420);
+    // star field drifting slowly
+    STARS.forEach(s => {
+      const sx = (s.x + p * s.speed * 0.3) % 640;
+      const tw = 0.6 + 0.4 * Math.sin(t / 600 + s.twinkle);
+      ctx.save(); ctx.globalAlpha = tw * 0.9;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(sx, s.y, s.r, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+    // nebula wisps
+    for (let i = 0; i < 3; i++) {
+      const nx = 100 + i * 200 + Math.sin(p * 0.005 + i) * 30;
+      const ny = 100 + i * 70 + Math.cos(p * 0.004 + i) * 20;
+      const ng = ctx.createRadialGradient(nx, ny, 0, nx, ny, 80 + i * 20);
+      ng.addColorStop(0, `hsla(${200 + i*40},80%,60%,0.06)`);
+      ng.addColorStop(1, 'transparent');
+      ctx.fillStyle = ng; ctx.fillRect(0, 0, 640, 420);
+    }
+    state.shake = 0;
+  }
+
+  // ── CHAPTER 4: SATURN ─────────────────────────────────────────────────────
+  else if (p < CH.nebula) {
+    const cp = chapterProgress(CH.saturn, CH.nebula, p);
+    ctx.fillStyle = '#010106';
+    ctx.fillRect(0, 0, 640, 420);
+    // stars
+    STARS.forEach(s => {
+      const sx = (s.x + p * s.speed * 0.2) % 640;
+      ctx.save(); ctx.globalAlpha = 0.7;
+      ctx.fillStyle = '#e8e8ff';
+      ctx.beginPath(); ctx.arc(sx, s.y, s.r * 0.8, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+    // Saturn — drifts across screen
+    const satX = lerp(800, -200, easeOut(cp));
+    const satY = 180 + Math.sin(p * 0.003) * 20;
+    // rings (draw as ellipse strokes, no scale distortion)
+    ctx.save();
+    ctx.translate(satX, satY);
+    for (let ri = 0; ri < 4; ri++) {
+      const rw = 90 + ri * 18;
+      const rh = 22 + ri * 5;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rw, rh, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${180 - ri*15},${140 - ri*10},${80 - ri*8},${0.6 - ri*0.1})`;
+      ctx.lineWidth = 6 + ri * 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+    // planet body
+    ctx.save();
+    ctx.translate(satX, satY);
+    const planetG = ctx.createRadialGradient(-20, -20, 0, 0, 0, 65);
+    planetG.addColorStop(0, '#f0d090');
+    planetG.addColorStop(0.4, '#c8a850');
+    planetG.addColorStop(0.7, '#a07830');
+    planetG.addColorStop(1, '#604010');
+    ctx.fillStyle = planetG;
+    ctx.beginPath(); ctx.arc(0, 0, 65, 0, Math.PI*2); ctx.fill();
+    // bands
+    for (let b = 0; b < 5; b++) {
+      ctx.save(); ctx.globalAlpha = 0.15;
+      ctx.fillStyle = b % 2 ? '#80600020' : '#ffffff20';
+      ctx.fillRect(-65, -65 + b * 26, 130, 13);
+      ctx.restore();
+    }
+    ctx.restore();
+    state.shake = 0;
+  }
+
+  // ── CHAPTER 5: NEBULA ─────────────────────────────────────────────────────
+  else if (p < CH.debris) {
+    const cp = chapterProgress(CH.nebula, CH.debris, p);
+    ctx.fillStyle = '#000008';
+    ctx.fillRect(0, 0, 640, 420);
+    // deep nebula colours
+    const nebulae = [
+      { x: 180, y: 160, r: 200, hue: 260, sat: 80 },
+      { x: 400, y: 250, r: 180, hue: 320, sat: 70 },
+      { x: 300, y: 120, r: 150, hue: 200, sat: 90 },
+    ];
+    nebulae.forEach((n, i) => {
+      const nx = n.x + Math.sin(p * 0.003 + i) * 15;
+      const ny = n.y + Math.cos(p * 0.002 + i) * 10;
+      const ng = ctx.createRadialGradient(nx, ny, 0, nx, ny, n.r);
+      ng.addColorStop(0, `hsla(${n.hue},${n.sat}%,60%,0.25)`);
+      ng.addColorStop(0.5, `hsla(${n.hue},${n.sat}%,40%,0.12)`);
+      ng.addColorStop(1, 'transparent');
+      ctx.fillStyle = ng; ctx.fillRect(0, 0, 640, 420);
+    });
+    // star clusters
+    STARS.forEach(s => {
+      const col = `hsl(${200 + s.twinkle * 30},60%,85%)`;
+      const tw = 0.5 + 0.5 * Math.sin(t/500 + s.twinkle);
+      ctx.save(); ctx.globalAlpha = tw * 0.9;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+    state.shake = 0;
+  }
+
+  // ── CHAPTER 6: ASTEROID FIELD / RUMBLE ────────────────────────────────────
+  else if (p < CH.redplanet) {
+    const cp = chapterProgress(CH.debris, CH.redplanet, p);
+    ctx.fillStyle = '#080608';
+    ctx.fillRect(0, 0, 640, 420);
+    STARS.forEach(s => {
+      ctx.save(); ctx.globalAlpha = 0.5;
+      ctx.fillStyle = '#ccccdd';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r*0.7, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+    // rocks tumbling
+    ROCKS.forEach(rock => {
+      rock.x = ((rock.x + rock.vx * (1 + cp * 2)) + 660) % 660;
+      rock.y = ((rock.y + rock.vy) + 440) % 440;
+      rock.rot += rock.rotSpeed;
+      ctx.save();
+      ctx.translate(rock.x, rock.y);
+      ctx.rotate(rock.rot);
+      ctx.fillStyle = rock.col;
+      ctx.beginPath();
+      // irregular polygon
+      const pts = 7;
+      for (let i = 0; i < pts; i++) {
+        const a = (i / pts) * Math.PI * 2;
+        const rr = rock.r * (0.7 + 0.3 * Math.sin(a * 3 + rock.rot));
+        if (i === 0) ctx.moveTo(Math.cos(a)*rr, Math.sin(a)*rr);
+        else ctx.lineTo(Math.cos(a)*rr, Math.sin(a)*rr);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    });
+    // occasional flash
+    if (p % 80 < 3) {
+      ctx.save(); ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 640, 420);
+      ctx.restore();
+    }
+    state.shake = 2 + Math.sin(p * 0.1) * 2 + cp * 3;
+  }
+
+  // ── CHAPTER 7: RED PLANET ─────────────────────────────────────────────────
+  else if (p < CH.rainbow) {
+    const cp = chapterProgress(CH.redplanet, CH.rainbow, p);
+    // deep red sky
+    const sky = ctx.createLinearGradient(0, 0, 0, 420);
+    sky.addColorStop(0, `rgb(${Math.floor(lerp(20,60,cp))},5,5)`);
+    sky.addColorStop(1, `rgb(${Math.floor(lerp(60,120,cp))},15,8)`);
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, 640, 420);
+    // planet surface horizon
+    const horizonY = lerp(350, 200, cp);
+    const surf = ctx.createLinearGradient(0, horizonY, 0, 420);
+    surf.addColorStop(0, '#8B2000');
+    surf.addColorStop(0.3, '#6B1800');
+    surf.addColorStop(1, '#3a0a00');
+    ctx.fillStyle = surf;
+    ctx.fillRect(0, horizonY, 640, 420 - horizonY);
+    // surface cracks / texture
+    ctx.save(); ctx.globalAlpha = 0.3;
+    for (let i = 0; i < 20; i++) {
+      const cx = (i * 37 + p * 0.5) % 640;
+      const cy = horizonY + 10 + (i * 17) % (420 - horizonY - 10);
+      ctx.strokeStyle = '#2a0800'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + 20 + Math.sin(i)*15, cy + 8);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // dust storm
+    ctx.save(); ctx.globalAlpha = cp * 0.25;
+    for (let i = 0; i < 150; i++) {
+      const dx = (i * 53 + p * 2) % 680 - 20;
+      const dy = horizonY - 20 + Math.sin(i * 0.7 + p * 0.01) * 30;
+      ctx.fillStyle = '#cc440022';
+      ctx.fillRect(dx, dy, 3 + Math.random()*4, 1);
+    }
+    ctx.restore();
+    // stars peeking through thin atmosphere
+    STARS.slice(0, 80).forEach(s => {
+      if (s.y > horizonY) return;
+      ctx.save(); ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#ffeecc';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r*0.6, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+    state.shake = cp * 2;
+  }
+
+  // ── CHAPTER 8: RAINBOW CHAOS ──────────────────────────────────────────────
+  else if (p < CH.implosion) {
+    const cp = chapterProgress(CH.rainbow, CH.implosion, p);
+    const hue = (p * 8) % 360;
+    // full colour stripes
+    for (let s = 0; s < 7; s++) {
+      ctx.fillStyle = `hsl(${(hue + s * 51) % 360}, 100%, 55%)`;
+      ctx.fillRect(0, s * 60, 640, 60);
+    }
+    // white flicker
+    if (p % 4 < 2) {
+      ctx.save(); ctx.globalAlpha = 0.35 + cp * 0.3;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 640, 420);
+      ctx.restore();
+    }
+    // horizontal glitch bars
+    if (p % 7 < 2) {
+      const barY = Math.random() * 380;
+      ctx.save(); ctx.globalAlpha = 0.6;
+      ctx.fillStyle = `hsl(${Math.random()*360},100%,50%)`;
+      ctx.fillRect(0, barY, 640, 4 + Math.random() * 8);
+      ctx.restore();
+    }
+    state.shake = 6 + cp * 8;
+  }
+
+  // ── CHAPTER 9: IMPLOSION TO BLACK ────────────────────────────────────────
+  else if (p < CH.silence) {
+    const cp = chapterProgress(CH.implosion, CH.silence, p);
+    // slam to black with imploding ring
+    ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, 640, 420);
+    const ringR = lerp(400, 0, easeIn(cp));
+    if (ringR > 1) {
+      const rg = ctx.createRadialGradient(320, 210, 0, 320, 210, ringR);
+      rg.addColorStop(0, 'transparent');
+      rg.addColorStop(0.7, 'transparent');
+      rg.addColorStop(0.85, `hsla(${(p*12)%360},100%,60%,${1 - cp})`);
+      rg.addColorStop(1, 'transparent');
+      ctx.fillStyle = rg; ctx.fillRect(0, 0, 640, 420);
+    }
+    // last few flickers
+    if (cp < 0.3 && p % 5 < 1) {
+      ctx.save(); ctx.globalAlpha = (0.3 - cp) / 0.3 * 0.5;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 640, 420);
+      ctx.restore();
+    }
+    state.shake = lerp(10, 0, cp);
+  }
+
+  // ── CHAPTER 10: SILENCE / ONE STAR ───────────────────────────────────────
+  else if (p < CH.end) {
+    const cp = chapterProgress(CH.silence, CH.end, p);
+    ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, 640, 420);
+    // a handful of stars fade in slowly
+    STARS.slice(0, 40).forEach(s => {
+      const tw = 0.4 + 0.6 * Math.sin(t / 1200 + s.twinkle);
+      ctx.save(); ctx.globalAlpha = easeOut(cp) * tw * 0.7;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 0.8, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+    // one bright central star pulses
+    const starPulse = 0.7 + 0.3 * Math.sin(t / 900);
+    ctx.save(); ctx.globalAlpha = easeOut(cp) * starPulse;
+    const sg = ctx.createRadialGradient(320, 210, 0, 320, 210, 12);
+    sg.addColorStop(0, '#ffffff');
+    sg.addColorStop(0.4, '#aaccff');
+    sg.addColorStop(1, 'transparent');
+    ctx.fillStyle = sg; ctx.fillRect(0, 0, 640, 420);
+    ctx.restore();
+    state.shake = 0;
+  }
+
+  // ── CHAPTER 11: FADE TO END ───────────────────────────────────────────────
+  else {
+    const cp = chapterProgress(CH.end, TOTAL_TICKS, p);
+    ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, 640, 420);
+    // stars fade out
+    STARS.slice(0, 40).forEach(s => {
+      ctx.save(); ctx.globalAlpha = (1 - cp) * 0.5;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 0.8, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+    state.shake = 0;
+  }
+
+  state.sunPhase++;
+  if (p >= TOTAL_TICKS) triggerEnd();
 }
 
 // ─── Drawing utilities ────────────────────────────────────────────────────────
@@ -829,292 +1242,17 @@ function drawDoor(t) {
   ctx.restore();
 }
 
-function drawFall(t, dt) {
-  const p = state.sunPhase;
-  const progress = Math.min(p / TOTAL_TICKS, 1);
-
-  // ── Rainbow flash zone ──────────────────────────────────────────────────────
-  const inRainbow = p >= RAINBOW_START && p <= RAINBOW_END;
-  if (inRainbow) {
-    const flashSpeed = 6;
-    const hue = (p * flashSpeed) % 360;
-    ctx.fillStyle = `hsl(${hue}, 100%, 55%)`;
-    ctx.fillRect(0, 0, 640, 420);
-
-    // stripes
-    for (let s = 0; s < 7; s++) {
-      ctx.fillStyle = `hsl(${(hue + s * 51) % 360}, 100%, 55%)`;
-      ctx.fillRect(0, s * 60, 640, 60);
-    }
-
-    // white flicker overlaid every ~5 ticks
-    if (p % 5 < 2) {
-      ctx.save();
-      ctx.globalAlpha = 0.4;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, 640, 420);
-      ctx.restore();
-    }
-
-    state.sunPhase++;
-    state.shake = 6 + Math.random() * 6;
-    return; // skip rest of drawing during rainbow
-  }
-
-  // ── Phase-based background ──────────────────────────────────────────────────
-  // Split progress across pre-rainbow portion only (p < RAINBOW_START)
-  const bgProgress = Math.min(p / RAINBOW_START, 1);
-
-  let bgR, bgG, bgB;
-  if (bgProgress < 0.45) {
-    const t0 = bgProgress / 0.45;
-    bgR = Math.floor(t0 * 110);
-    bgG = Math.floor(t0 * 18);
-    bgB = Math.floor(t0 * 8);
-  } else if (bgProgress < 0.85) {
-    const t1 = (bgProgress - 0.45) / 0.4;
-    bgR = Math.floor(110 + t1 * 145);
-    bgG = Math.floor(18  + t1 * 170);
-    bgB = Math.floor(8   + t1 * 50);
-  } else {
-    const t2 = (bgProgress - 0.85) / 0.15;
-    bgR = 255;
-    bgG = Math.floor(188 + t2 * 40);
-    bgB = Math.floor(58  + t2 * 80);
-  }
-
-  // Post-rainbow: hold black (video sequence fires immediately after)
-  if (p > RAINBOW_END) {
-    bgR = 0; bgG = 0; bgB = 0;
-  }
-
-  ctx.fillStyle = `rgb(${bgR},${bgG},${bgB})`;
-  ctx.fillRect(0, 0, 640, 420);
-
-  // ── Sun ─────────────────────────────────────────────────────────────────────
-  if (p < RAINBOW_START) {
-    const sunR = bgProgress * 380;
-    if (sunR > 2) {
-      const sunGrad = ctx.createRadialGradient(320, 210, 0, 320, 210, sunR);
-      sunGrad.addColorStop(0,   '#ffffff');
-      sunGrad.addColorStop(0.2, '#fff8cc');
-      sunGrad.addColorStop(0.5, '#ffcc44');
-      sunGrad.addColorStop(0.8, '#ff6600');
-      sunGrad.addColorStop(1,   'transparent');
-      ctx.fillStyle = sunGrad;
-      ctx.fillRect(0, 0, 640, 420);
-    }
-
-    // rotating rays (mid phase)
-    if (bgProgress > 0.35 && bgProgress < 0.9) {
-      const rayAlpha = Math.sin((bgProgress - 0.35) / 0.55 * Math.PI) * 0.12;
-      ctx.save();
-      ctx.globalAlpha = rayAlpha;
-      for (let r = 0; r < 12; r++) {
-        const angle = (r / 12) * Math.PI * 2 + p * 0.003;
-        ctx.beginPath();
-        ctx.moveTo(320, 210);
-        ctx.lineTo(320 + Math.cos(angle) * 700, 210 + Math.sin(angle) * 700);
-        ctx.strokeStyle = '#ffee88';
-        ctx.lineWidth = 20;
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-  }
-
-  // ── Screen grain (mid zone) ─────────────────────────────────────────────────
-  if (bgProgress > 0.5 && p < RAINBOW_START) {
-    const grainAlpha = Math.sin((bgProgress - 0.6) / 0.4 * Math.PI) * 0.05;
-    ctx.save();
-    ctx.globalAlpha = grainAlpha;
-    for (let i = 0; i < 200; i++) {
-      ctx.fillStyle = Math.random() > 0.5 ? '#ffffff' : '#ff8800';
-      ctx.fillRect(Math.random() * 640, Math.random() * 420, 2, 2);
-    }
-    ctx.restore();
-  }
-
-  // ── Advance ─────────────────────────────────────────────────────────────────
-  state.sunPhase++;
-
-  // Shake: builds mid-fall, ramps hard into rainbow
-  if (p > 1800 && p < RAINBOW_START - 100) {
-    state.shake = 1 + Math.random() * 2;
-  } else if (p > RAINBOW_START - 100 && p < RAINBOW_START) {
-    state.shake = 3 + Math.random() * 4; // ramp up into rainbow
-  } else if (p > RAINBOW_END) {
-    state.shake = 0;
-  } else {
-    state.shake = 0;
-  }
-
-  if (p > TOTAL_TICKS) triggerEnd();
-}
-
-// ─── Video clip system ────────────────────────────────────────────────────────
-// Drop your clips in /video/ and list them here.
-// Supported: .mp4, .webm (use .mp4 for best browser support)
-const VIDEO_CLIPS = [
-  'video/clip1.mp4',
-  'video/clip2.mp4',
-  'video/clip3.mp4',
-];
-
-// Placeholder screens shown when video files aren't found yet
-const PLACEHOLDERS = [
-  { label: 'CLIP 01', duration: 3000, bg: '#0a0005', tint: '#3a0030' },
-  { label: 'CLIP 02', duration: 3000, bg: '#000a05', tint: '#003a20' },
-  { label: 'CLIP 03', duration: 3000, bg: '#05000a', tint: '#20003a' },
-];
-
-// Fade between clips (ms)
-const CLIP_CROSSFADE = 400;
-// Fade to black after last clip (ms)
-const FADE_TO_BLACK = 1500;
 
 let ended = false;
 function triggerEnd() {
   if (ended) return;
   ended = true;
-  stopSong(2000);
-  playVideoSequence();
-}
-
-function playVideoSequence() {
-  const overlay = document.getElementById('video-overlay');
-  const player  = document.getElementById('video-player');
-  const fadEl   = document.getElementById('video-fade');
-
-  overlay.style.display = 'block';
-
-  // Try loading the first clip — if it errors, use placeholder mode
-  const testVid = new Audio(VIDEO_CLIPS[0]);
-  testVid.addEventListener('error', () => runPlaceholders());
-  testVid.addEventListener('canplay', () => runRealClips());
-  testVid.src = VIDEO_CLIPS[0];
-
-  function runRealClips() {
-    const clips = VIDEO_CLIPS.filter(Boolean);
-    let index = 0;
-
-    function playClip(i) {
-      if (i >= clips.length) {
-        fadEl.style.transition = `opacity ${FADE_TO_BLACK}ms ease`;
-        fadEl.style.opacity = '1';
-        setTimeout(showEndScreen, FADE_TO_BLACK);
-        return;
-      }
-      if (i > 0) {
-        fadEl.style.transition = `opacity ${CLIP_CROSSFADE / 2}ms ease`;
-        fadEl.style.opacity = '1';
-      }
-      setTimeout(() => {
-        player.src = clips[i];
-        player.load();
-        player.play().catch(() => {});
-        fadEl.style.transition = `opacity ${CLIP_CROSSFADE / 2}ms ease`;
-        fadEl.style.opacity = '0';
-        player.onended = () => playClip(i + 1);
-        player.onerror = () => setTimeout(() => playClip(i + 1), 8000);
-      }, i > 0 ? CLIP_CROSSFADE / 2 : 0);
-    }
-    playClip(0);
-  }
-
-  function runPlaceholders() {
-    // hide the video element, draw placeholder on the overlay canvas instead
-    player.style.display = 'none';
-
-    const phCanvas = document.createElement('canvas');
-    phCanvas.width  = 640;
-    phCanvas.height = 420;
-    phCanvas.style.cssText = 'width:100%;height:100%;image-rendering:pixelated;position:absolute;top:0;left:0;';
-    overlay.appendChild(phCanvas);
-    const phCtx = phCanvas.getContext('2d');
-
-    let index = 0;
-    let startTime = null;
-    let fadeOutStarted = false;
-
-    function drawPlaceholder(ts) {
-      if (!startTime) startTime = ts;
-      const elapsed = ts - startTime;
-      const ph = PLACEHOLDERS[index];
-
-      // background
-      phCtx.fillStyle = ph.bg;
-      phCtx.fillRect(0, 0, 640, 420);
-
-      // animated tint gradient
-      const pulse = 0.3 + 0.2 * Math.sin(ts / 800);
-      const g = phCtx.createRadialGradient(320, 210, 0, 320, 210, 300);
-      g.addColorStop(0, ph.tint);
-      g.addColorStop(1, 'transparent');
-      phCtx.save();
-      phCtx.globalAlpha = pulse;
-      phCtx.fillStyle = g;
-      phCtx.fillRect(0, 0, 640, 420);
-      phCtx.restore();
-
-      // scan lines
-      phCtx.save();
-      phCtx.globalAlpha = 0.07;
-      for (let y = 0; y < 420; y += 4) {
-        phCtx.fillStyle = '#000000';
-        phCtx.fillRect(0, y, 640, 2);
-      }
-      phCtx.restore();
-
-      // label
-      phCtx.save();
-      phCtx.globalAlpha = 0.25;
-      phCtx.font = '13px VT323, monospace';
-      phCtx.fillStyle = '#ffffff';
-      phCtx.textAlign = 'center';
-      phCtx.fillText(`[ ${ph.label} — replace with video/clip${index+1}.mp4 ]`, 320, 210);
-      phCtx.restore();
-
-      // noise grain
-      phCtx.save();
-      phCtx.globalAlpha = 0.04;
-      for (let i = 0; i < 150; i++) {
-        phCtx.fillStyle = '#ffffff';
-        phCtx.fillRect(Math.random() * 640, Math.random() * 420, 2, 2);
-      }
-      phCtx.restore();
-
-      // advance when duration hit
-      if (elapsed >= ph.duration) {
-        startTime = null;
-        index++;
-        if (index >= PLACEHOLDERS.length) {
-          // fade to black and end
-          fadEl.style.transition = `opacity ${FADE_TO_BLACK}ms ease`;
-          fadEl.style.opacity = '1';
-          setTimeout(showEndScreen, FADE_TO_BLACK);
-          return;
-        }
-        // crossfade between placeholders
-        fadEl.style.transition = `opacity ${CLIP_CROSSFADE / 2}ms ease`;
-        fadEl.style.opacity = '1';
-        setTimeout(() => {
-          fadEl.style.transition = `opacity ${CLIP_CROSSFADE / 2}ms ease`;
-          fadEl.style.opacity = '0';
-        }, CLIP_CROSSFADE / 2);
-      }
-
-      requestAnimationFrame(drawPlaceholder);
-    }
-
-    requestAnimationFrame(drawPlaceholder);
-  }
-}
-
-function showEndScreen() {
-  const endEl = document.getElementById('end-screen');
-  endEl.style.display = 'flex';
-  document.getElementById('restart-btn').addEventListener('click', () => location.reload());
+  stopSong(3000);
+  setTimeout(() => {
+    const endEl = document.getElementById('end-screen');
+    endEl.style.display = 'flex';
+    document.getElementById('restart-btn').addEventListener('click', () => location.reload());
+  }, 1000);
 }
 
 // ─── Path trapezoid hit-test ──────────────────────────────────────────────────
@@ -1198,6 +1336,43 @@ function loop(t) {
   requestAnimationFrame(loop);
 }
 
+// ─── Ambient autoplay on page load ────────────────────────────────────────────
+// Browsers block audio until first user interaction.
+// We attempt immediately, and if blocked, play on first click/touch anywhere.
+let ambientStarted = false;
+function tryStartAmbient() {
+  if (ambientStarted) return;
+  initAudio();
+  if (!audio.ambient) return;
+  audio.ambient.volume = 0;
+  audio.ambient.muted = false;
+  audio.ambient.play().then(() => {
+    ambientStarted = true;
+    fadeAudioIn(audio.ambient, 0.6, 4000);
+  }).catch(() => {
+    // blocked — wait for first interaction
+    const unlock = () => {
+      if (ambientStarted) return;
+      ambientStarted = true;
+      audio.ambient.play().then(() => {
+        fadeAudioIn(audio.ambient, 0.6, 4000);
+      }).catch(() => {});
+      document.removeEventListener('click', unlock);
+      document.removeEventListener('touchstart', unlock);
+      document.removeEventListener('keydown', unlock);
+    };
+    document.addEventListener('click', unlock);
+    document.addEventListener('touchstart', unlock);
+    document.addEventListener('keydown', unlock);
+  });
+}
+
+// Try immediately on script load
+window.addEventListener('load', () => {
+  initAudio();
+  tryStartAmbient();
+});
+
 // ─── Mute button ──────────────────────────────────────────────────────────────
 document.getElementById('mute-btn').addEventListener('click', () => {
   const btn = document.getElementById('mute-btn');
@@ -1208,22 +1383,11 @@ document.getElementById('mute-btn').addEventListener('click', () => {
   btn.textContent  = audio.muted ? '✕' : '♪';
 });
 
-// ─── Ambient starts on first interaction (title screen) ───────────────────────
-let ambientStarted = false;
-function tryStartAmbient() {
-  if (ambientStarted) return;
-  ambientStarted = true;
-  initAudio();
-  playAmbient();
-}
-document.getElementById('title-screen').addEventListener('mousemove', tryStartAmbient, { once: true });
-document.getElementById('title-screen').addEventListener('click', tryStartAmbient);
-
 // ─── Start button ─────────────────────────────────────────────────────────────
 document.getElementById('start-btn').addEventListener('click', () => {
   document.getElementById('title-screen').style.display = 'none';
   showMessage('the forest is quiet. it has been waiting for you.', 4000);
-  tryStartAmbient(); // fallback in case mousemove didn't fire
+  tryStartAmbient(); // fallback if autoplay was blocked
   requestAnimationFrame(loop);
 });
 
